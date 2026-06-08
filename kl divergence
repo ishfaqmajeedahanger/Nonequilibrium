@@ -1,0 +1,60 @@
+function kl_divergence_simulation()
+
+clc;
+clear;
+close all;
+
+%% ================= LOAD DATA =================
+
+load('probability_distribution_data.mat', ...
+     'dist_E0', 'dist_E1');
+
+%% ================= HISTOGRAM =================
+
+all_data = [dist_E0; dist_E1];
+
+nbins = 40;
+bins = linspace(min(all_data), max(all_data), nbins);
+
+% density histogram
+[p_hist, edges] = histcounts(dist_E0, bins, 'Normalization','pdf');
+[q_hist, ~]     = histcounts(dist_E1, bins, 'Normalization','pdf');
+
+% convert density -> probability per bin
+bin_width = edges(2) - edges(1);
+
+p = p_hist * bin_width;
+q = q_hist * bin_width;
+
+%% ================= KL DIVERGENCE =================
+
+eps = 1e-12;
+
+p = p + eps;
+q = q + eps;
+
+p = p / sum(p);
+q = q / sum(q);
+
+KL_pq = sum(p .* log(p ./ q));
+KL_qp = sum(q .* log(q ./ p));
+
+fprintf('KL(E0 || E1) = %.6f\n', KL_pq);
+fprintf('KL(E1 || E0) = %.6f\n', KL_qp);
+
+%% ================= PLOT =================
+
+centers = 0.5*(edges(1:end-1) + edges(2:end));
+
+figure;
+plot(centers, p, 'LineWidth',1.8);
+hold on;
+plot(centers, q, 'LineWidth',1.8);
+
+xlabel('P / (P + S)');
+ylabel('Probability');
+legend('PDF E0','PDF E1');
+grid on;
+box on;
+
+end
