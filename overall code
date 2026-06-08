@@ -1,0 +1,342 @@
+function Overallfinding(mode)
+
+clc;
+close all;
+
+if nargin == 0
+    mode = 'Total Enzyme';
+end
+
+
+%% ================= COMMON PARAMETERS =================
+
+alpha = 5.0;
+beta  = 0.2;
+ATP   = 1.0;
+
+k1  = 0.5;
+k_1 = 0.1;
+k2  = 0.05;
+k_2 = 0.2;
+k3  = 0.3;
+k_3 = 0.05;
+
+t_end = 700.0;
+
+R = 8.314;
+T = 300.0;
+eps = 1e-12;
+
+%% ================= SWITCH =================
+
+switch lower(strtrim(mode))
+
+%% =====================================================
+%% ================= TOTAL ENZYME ======================
+%% =====================================================
+
+case 'total enzyme'
+
+    E_vals = 1:1:449;
+    ratio  = zeros(size(E_vals));
+
+    for i = 1:length(E_vals)
+
+        Etot = E_vals(i);
+        y0 = [0; Etot; 0; 0; 0];
+
+        sol = ode45(@(t,y) system(t,y,alpha,beta,ATP,...
+                    k1,k_1,k2,k_2,k3,k_3), [0 t_end], y0);
+
+        y_final = deval(sol, t_end);
+
+        S = y_final(1);
+        P = y_final(5);
+
+        ratio(i) = P/(P+S);
+    end
+
+    y_mid = 0.5*(min(ratio)+max(ratio));
+    [~, idx_star] = min(abs(ratio - y_mid));
+    E_star = E_vals(idx_star);
+
+    E0 = round(0.9*E_star);
+    E1 = round(1.1*E_star);
+
+    [~, idx0] = min(abs(E_vals - E0));
+    [~, idx1] = min(abs(E_vals - E1));
+
+    E0 = E_vals(idx0);
+    E1 = E_vals(idx1);
+
+    fprintf('E0 = %d, E* = %d, E1 = %d\n', E0, E_star, E1);
+
+    figure;
+    scatter(E_vals, ratio, 15, 'k', 'filled'); hold on;
+    xline(E0,'--b'); xline(E_star,'--r'); xline(E1,'--g');
+    xlabel('Total enzyme concentration');
+    ylabel('P/(P+S)');
+    grid on; box on;
+    save('TotalEnzymeData.mat','E_vals','ratio','E0','E_star','E1')
+
+
+%% =====================================================
+%% ============== PROBABILITY DISTRIBUTION ============
+%% =====================================================
+
+case 'probability distribution'
+
+    % First compute E0,E1 exactly same way
+    [E0,E1] = compute_midpoint();
+
+    N_runs = 1000;
+    dist_E0 = zeros(N_runs,1);
+    dist_E1 = zeros(N_runs,1);
+
+    for i=1:N_runs
+        dist_E0(i)=gillespie(E0);
+        dist_E1(i)=gillespie(E1);
+    end
+
+    assignin('base','dist_E0',dist_E0);
+    assignin('base','dist_E1',dist_E1);
+
+    figure;
+    histogram(dist_E0,50,'Normalization','pdf','FaceAlpha',0.6);
+    hold on;
+    histogram(dist_E1,50,'Normalization','pdf','FaceAlpha',0.6);
+    xlabel('P/(P+S)');
+    ylabel('Probability density');
+    legend('E0','E1');
+    grid on;
+
+    save('ProbabilityDistributionData.mat','dist_E0','dist_E1','E0','E1')
+
+
+%% =====================================================
+%% ================= ENERGY DISSIPATION ================
+%% =====================================================
+
+case 'energy dissipation'
+
+    [E0,E1] = compute_midpoint();
+
+    phi_E0 = compute_entropy(E0);
+    phi_E1 = compute_entropy(E1);
+
+    fprintf('Energy dissipation at E0 = %.6f\n',phi_E0);
+    fprintf('Energy dissipation at E1 = %.6f\n',phi_E1);
+    save('EnergyDissipationData.mat','phi_E0','phi_E1','E0','E1')
+
+
+%% =====================================================
+%% ================= CHEMICAL POTENTIAL ================
+%% =====================================================
+
+case 'chemical potential'
+
+    [E0,E1] = compute_midpoint();
+
+    dmu_E0 = compute_dmu(E0);
+    dmu_E1 = compute_dmu(E1);
+
+    fprintf('Delta mu at E0 = %.6f\n',dmu_E0);
+    fprintf('Delta mu at E1 = %.6f\n',dmu_E1);
+    fprintf('Delta Delta mu = %.6f\n',dmu_E1-dmu_E0);
+    save('ChemicalPotentialData.mat','dmu_E0','dmu_E1','E0','E1')
+
+
+%% =====================================================
+%% ================= KL DIVERGENCE =====================
+%% =====================================================
+
+case 'kl divergence'
+
+    if ~evalin('base','exist(''dist_E0'',''var'')')
+        error('Run Probability Distribution first.');
+    end
+
+    dist_E0 = evalin('base','dist_E0');
+    dist_E1 = evalin('base','dist_E1');
+
+    all_data = [dist_E0;dist_E1];
+    bins = linspace(min(all_data),max(all_data),40);
+
+    [p_hist,edges] = histcounts(dist_E0,bins,'Normalization','pdf');
+    [q_hist,~]     = histcounts(dist_E1,bins,'Normalization','pdf');
+
+    bw = edges(2)-edges(1);
+
+    p = p_hist*bw;
+    q = q_hist*bw;
+
+    p = p + eps; q = q + eps;
+    p = p/sum(p); q=q/sum(q);
+
+    KL_pq = sum(p.*log(p./q));
+    KL_qp = sum(q.*log(q./p));
+
+    fprintf('KL(E0 || E1) = %.6f\n',KL_pq);
+    fprintf('KL(E1 || E0) = %.6f\n',KL_qp);
+    save('KLData.mat','KL_pq','KL_qp')
+
+
+    centers = 0.5*(edges(1:end-1)+edges(2:end));
+    figure;
+    plot(centers,p,'LineWidth',1.8); hold on;
+    plot(centers,q,'LineWidth',1.8);
+    legend('PDF E0','PDF E1');
+    grid on;
+
+
+%% =====================================================
+%% ================= VERIFY ENERGY =====================
+%% =====================================================
+
+case 'verify energy dissipation'
+
+    [E0,E1] = compute_midpoint();
+
+    verify(E0);
+    verify(E1);
+
+otherwise
+    error('Invalid mode string.');
+
+end
+
+%% =====================================================
+%% ================= HELPER FUNCTIONS ==================
+%% =====================================================
+
+    function [E0,E1] = compute_midpoint()
+
+        E_vals = 1:1:449;
+        ratio  = zeros(size(E_vals));
+
+        for ii=1:length(E_vals)
+
+            Etot = E_vals(ii);
+            y0=[0;Etot;0;0;0];
+            sol=ode45(@(t,y) system(t,y,alpha,beta,ATP,...
+                k1,k_1,k2,k_2,k3,k_3),[0 t_end],y0);
+            y_final=deval(sol,t_end);
+
+            S=y_final(1); P=y_final(5);
+            ratio(ii)=P/(P+S+eps);
+        end
+
+        y_mid=0.5*(min(ratio)+max(ratio));
+        [~,idx]=min(abs(ratio-y_mid));
+        E_star=E_vals(idx);
+
+        E0=round(0.9*E_star);
+        E1=round(1.1*E_star);
+    end
+
+    function Phi=compute_entropy(Etot)
+
+        y0=[0;Etot;0;0;0];
+        sol=ode45(@(t,y) system(t,y,alpha,beta,ATP,...
+            k1,k_1,k2,k_2,k3,k_3),[0 t_end],y0);
+        y=deval(sol,t_end);
+
+        S=y(1);E=y(2);ET=y(3);ETS=y(4);P=y(5);
+
+        J1f=k1*ATP*E; J1b=k_1*ET;
+        J2f=k2*ET*S;  J2b=k_2*ETS;
+        J3f=k3*ETS;   J3b=k_3*E*P;
+
+        flux=[J1f J1b;J2f J2b;J3f J3b];
+        Phi=0;
+
+        for jj=1:3
+            Jf=flux(jj,1)+eps;
+            Jb=flux(jj,2)+eps;
+            Phi=Phi+(Jf-Jb)*R*T*log(Jf/Jb);
+        end
+    end
+
+    function dmu=compute_dmu(Etot)
+
+        y0=[0;Etot;0;0;0];
+        sol=ode45(@(t,y) system(t,y,alpha,beta,ATP,...
+            k1,k_1,k2,k_2,k3,k_3),[0 t_end],y0);
+        y=deval(sol,t_end);
+
+        S=y(1); P=y(5);
+
+        forward=k1*ATP*k2*S*k3;
+        backward=k_1*k_2*k_3*P;
+
+        dmu=R*T*log((forward+eps)/(backward+eps));
+    end
+
+    function verify(Etot)
+        Phi_full=compute_entropy(Etot);
+        dmu=compute_dmu(Etot);
+
+        y0=[0;Etot;0;0;0];
+        sol=ode45(@(t,y) system(t,y,alpha,beta,ATP,...
+            k1,k_1,k2,k_2,k3,k_3),[0 t_end],y0);
+        y=deval(sol,t_end);
+
+        E=y(2); ETS=y(4); P=y(5);
+        Jnet=k3*ETS-k_3*E*P;
+
+        fprintf('\nEtot = %d\n',Etot);
+        fprintf('Jnet*DeltaMu = %.6f\n',Jnet*dmu);
+        fprintf('Full entropy = %.6f\n',Phi_full);
+    end
+
+    function value=gillespie(Etot)
+
+        S=0;E=Etot;ET=0;ETS=0;P=0;t=0;
+
+        while t<t_end
+            a=[alpha;
+               k1*ATP*E;
+               k_1*ET;
+               k2*ET*S;
+               k_2*ETS;
+               k3*ETS;
+               k_3*E*P;
+               beta*P];
+
+            a0=sum(a);
+            if a0<=0,break,end
+
+            tau=-log(rand)/a0;
+            t=t+tau;
+            r=find(cumsum(a)>=rand*a0,1);
+
+            switch r
+                case 1,S=S+1;
+                case 2,E=E-1;ET=ET+1;
+                case 3,ET=ET-1;E=E+1;
+                case 4,ET=ET-1;S=S-1;ETS=ETS+1;
+                case 5,ETS=ETS-1;ET=ET+1;S=S+1;
+                case 6,ETS=ETS-1;E=E+1;P=P+1;
+                case 7,E=E-1;P=P-1;ETS=ETS+1;
+                case 8,P=P-1;
+            end
+        end
+
+        value=P/(P+S+eps);
+    end
+
+end
+
+function dydt = system(~,y,alpha,beta,ATP,k1,k_1,k2,k_2,k3,k_3)
+
+S=y(1);E=max(y(2),0);ET=y(3);ETS=y(4);P=y(5);
+
+dS=alpha-k2*ET*S+k_2*ETS;
+dE=-k1*ATP*E+k_1*ET+k3*ETS-k_3*E*P;
+dET=k1*ATP*E-k_1*ET-k2*ET*S+k_2*ETS;
+dETS=k2*ET*S-(k_2+k3)*ETS+k_3*E*P;
+dP=k3*ETS-k_3*E*P-beta*P;
+
+dydt=[dS;dE;dET;dETS;dP];
+
+end
